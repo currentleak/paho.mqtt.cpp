@@ -40,9 +40,9 @@
 
 #include "mqtt/async_client.h"
 
-const std::string DFLT_SERVER_URI("mqtt://localhost:1883");
+const std::string DFLT_SERVER_URI("mqtt://192.168.1.73:1883");
 const std::string CLIENT_ID("paho_cpp_async_subscribe");
-const std::string TOPIC("hello");
+const std::string TOPIC("inspection/ascan");                 // test with Wave by Sonatest
 
 const int QOS = 1;
 const int N_RETRY_ATTEMPTS = 5;
