@@ -31,9 +31,7 @@ set(EXECUTABLES
     async_publish
     async_publish_time
     async_subscribe
-    async_consume
     async_consume_v5
-    async_message_consume
     async_message_consume_v5
     data_publish
     mqttpp_chat
@@ -43,7 +41,6 @@ set(EXECUTABLES
     rpc_math_srvr
     server_props_v5
     sync_publish
-    sync_consume
     sync_consume_v5
     sync_reconnect
     topic_publish
