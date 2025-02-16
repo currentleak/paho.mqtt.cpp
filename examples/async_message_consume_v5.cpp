@@ -40,10 +40,10 @@
 
 using namespace std;
 
-const string DFLT_SERVER_URI{"mqtt://localhost:1883"};
+const string DFLT_SERVER_URI{"mqtt://192.168.1.73:1883"};
 const string CLIENT_ID{"PahoCppAsyncConsumeV5"};
 
-const string TOPIC{"hello"};
+const string TOPIC{"inspection/ascan"};
 const int QOS = 1;
 
 /////////////////////////////////////////////////////////////////////////////
