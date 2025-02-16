@@ -1,9 +1,13 @@
+
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
-#include "mqtt/async_client.h"
-#include "/home/kco/json/single_include/nlohmann/json.hpp"  // Ajoutez la bibliothèque nlohmann JSON (https://github.com/nlohmann/json)
+#include <ctime>
+#include <sstream>
+#include <iomanip>
+#include "mqtt/async_client.h" // Bibliothèque MQTT (https://github.com/eclipse-paho/paho.mqtt.cpp)
+#include "/home/kco/json/single_include/nlohmann/json.hpp"  // Bibliothèque nlohmann JSON (https://github.com/nlohmann/json)
 
 using json = nlohmann::json;
 using namespace std;
@@ -15,23 +19,31 @@ const int QOS = 1;
 
 int main(int argc, char* argv[])
 {
+    // L'adresse du serveur peut être passée en argument ; sinon on utilise l'adresse par défaut.
     auto serverURI = (argc > 1) ? string{argv[1]} : DFLT_SERVER_URI;
+
+    // Génération du nom de fichier CSV en ajoutant la date et l'heure (format: data_YYYYMMDD_HHMMSS.csv)
+    auto t = std::time(nullptr);
+    std::tm tm = *std::localtime(&t);
+    std::ostringstream oss;
+    oss << "data_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << ".csv";
+    std::string filename = oss.str();
+
+    // Ouvrir le fichier CSV en mode ajout
+    std::ofstream csvFile(filename, std::ios::out | std::ios::app);
+    bool headerWritten = false;
+    csvFile.seekp(0, std::ios::end);
+    if(csvFile.tellp() == 0)
+        headerWritten = false;
+    else
+        headerWritten = true;
+
     mqtt::async_client cli(serverURI, CLIENT_ID);
 
     auto connOpts = mqtt::connect_options_builder::v5()
                         .clean_start(false)
                         .properties({{mqtt::property::SESSION_EXPIRY_INTERVAL, 604800}})
                         .finalize();
-
-    // Ouvrir le fichier CSV en mode ajout
-    std::ofstream csvFile("data.csv", std::ios::out | std::ios::app);
-    bool headerWritten = false;
-    // Vérifier si le fichier est vide pour écrire l'en-tête
-    csvFile.seekp(0, std::ios::end);
-    if(csvFile.tellp() == 0)
-        headerWritten = false;
-    else
-        headerWritten = true;
 
     try {
         cli.set_connection_lost_handler([](const std::string&) {
@@ -41,10 +53,10 @@ int main(int argc, char* argv[])
             cout << "*** Disconnected. Reason [0x" << hex << int{reason} << "]: " << reason << " ***" << endl;
         });
 
-        // Démarrer la consommation pour ne pas manquer de messages
+        // Démarrage de la consommation pour ne pas manquer de messages
         cli.start_consuming();
 
-        // Connexion au broker
+        // Connexion au serveur MQTT
         cout << "Connecting to the MQTT server..." << flush;
         auto tok = cli.connect(connOpts);
         auto rsp = tok->get_connect_response();
@@ -75,7 +87,7 @@ int main(int argc, char* argv[])
                 vector<string> header;
                 vector<double> values;
 
-                // On suppose ici 4 mesures : measurement.1 à measurement.4
+                // Traitement des 4 mesures (measurement.1 à measurement.4)
                 for (int i = 1; i <= 4; i++) {
                     string key = "measurement." + to_string(i);
                     if(j.contains(key)) {
@@ -87,26 +99,28 @@ int main(int argc, char* argv[])
                     }
                 }
 
-                // Écriture de l'en-tête (si non encore écrit)
+                // Écriture de l'en-tête (si non déjà écrit)
                 if (!headerWritten) {
                     for (size_t i = 0; i < header.size(); i++) {
                         csvFile << header[i] << (i < header.size()-1 ? "," : "\n");
                     }
                     headerWritten = true;
+                    cout << "Message traité et écrit en CSV." << endl;
                 }
-                // Écriture des données
+                // Écriture des données dans le CSV
                 for (size_t i = 0; i < values.size(); i++) {
                     csvFile << values[i] << (i < values.size()-1 ? "," : "\n");
                 }
                 csvFile.flush();
-                cout << "Message traité et écrit en CSV." << endl;
+                cout << ".";
+                cout.flush();
             }
             catch (const std::exception & e) {
                 cerr << "Erreur lors du parsing du JSON: " << e.what() << endl;
             }
         }
 
-        // Arrêt du consommateur et déconnexion
+        // Arrêt de la consommation et déconnexion
         if (cli.is_connected()) {
             cout << "\nShutting down and disconnecting from the MQTT server..." << flush;
             cli.stop_consuming();
