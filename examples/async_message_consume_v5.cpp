@@ -23,6 +23,7 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <memory>
 #include "mqtt/async_client.h"
 #include "/home/kco/json/single_include/nlohmann/json.hpp"  // Bibliothèque nlohmann JSON
 
@@ -58,19 +59,11 @@ int main(int argc, char* argv[])
         }
     }
 
-    // Génération du nom du fichier CSV incluant la date et l'heure (ex: data_YYYYMMDD_HHMMSS.csv)
-    auto t = std::time(nullptr);
-    std::tm tm = *std::localtime(&t);
-    std::ostringstream oss;
-    oss << "data_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << ".csv";
-    std::string filename = oss.str();
-
-    // Ouverture du fichier CSV en mode ajout
-    std::ofstream csvFile(filename, std::ios::out | std::ios::app);
+    // Nous ne créons pas le fichier CSV tout de suite, il sera créé seulement s'il y a des données à enregistrer.
+    std::unique_ptr<std::ofstream> csvFile;
     bool headerWritten = false;
-    csvFile.seekp(0, std::ios::end);
-    if(csvFile.tellp() != 0)
-        headerWritten = true;
+    // Nom du fichier (sera défini lors de la première écriture)
+    string filename;
 
     mqtt::async_client cli(serverURI, CLIENT_ID);
 
@@ -111,6 +104,7 @@ int main(int argc, char* argv[])
         }
         cout << "\n  OK" << endl;
         cout << "\nWaiting for messages on topic: '" << TOPIC << "'" << endl;
+        cout << "La moyenne de " << averageCount << " message(s) sera écrite en CSV." << endl;
 
         while (true) {
             auto msg = cli.consume_message();
@@ -118,7 +112,7 @@ int main(int argc, char* argv[])
                 break;
 
             string payload = msg->to_string();
-
+            
             try {
                 // Parser le JSON reçu
                 json j = json::parse(payload);
@@ -144,19 +138,36 @@ int main(int argc, char* argv[])
                     for (int i = 0; i < 4; i++) {
                         avgValues[i] = sumValues[i] / messageCounter;
                     }
+                    
+                    // Ouvrir le fichier CSV lors de la première écriture
+                    if (!csvFile) {
+                        // Génération du nom du fichier CSV incluant la date et l'heure (ex: data_YYYYMMDD_HHMMSS.csv)
+                        auto t = std::time(nullptr);
+                        std::tm tm = *std::localtime(&t);
+                        std::ostringstream oss;
+                        oss << "data_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << ".csv";
+                        filename = oss.str();
+                        csvFile = make_unique<ofstream>(filename, std::ios::out | std::ios::app);
+                        if (!csvFile->is_open()) {
+                            cerr << "Impossible d'ouvrir le fichier " << filename << endl;
+                            return 1;
+                        }
+                    }
+
                     // Écriture de l'en-tête si nécessaire
                     if (!headerWritten) {
                         for (size_t i = 0; i < headerNames.size(); i++) {
-                            csvFile << headerNames[i] << (i < headerNames.size()-1 ? "," : "\n");
+                            *csvFile << headerNames[i] << (i < headerNames.size()-1 ? "," : "\n");
                         }
                         headerWritten = true;
                     }
                     // Écriture de la ligne contenant les moyennes calculées
                     for (size_t i = 0; i < avgValues.size(); i++) {
-                        csvFile << avgValues[i] << (i < avgValues.size()-1 ? "," : "\n");
+                        *csvFile << avgValues[i] << (i < avgValues.size()-1 ? "," : "\n");
                     }
-                    csvFile.flush();
-                    cout << "Moyenne de " << messageCounter << " messages calculée et écrite en CSV." << endl;
+                    csvFile->flush();
+                    cout << ".";
+                    cout.flush();
                     // Réinitialiser le compteur et les sommes pour le prochain lot
                     messageCounter = 0;
                     fill(sumValues.begin(), sumValues.end(), 0.0);
@@ -173,17 +184,31 @@ int main(int argc, char* argv[])
             for (int i = 0; i < 4; i++) {
                 avgValues[i] = sumValues[i] / messageCounter;
             }
+            // Ouvrir le fichier CSV si ce n'est pas déjà fait
+            if (!csvFile) {
+                auto t = std::time(nullptr);
+                std::tm tm = *std::localtime(&t);
+                std::ostringstream oss;
+                oss << "data_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << ".csv";
+                filename = oss.str();
+                csvFile = make_unique<ofstream>(filename, std::ios::out | std::ios::app);
+                if (!csvFile->is_open()) {
+                    cerr << "Impossible d'ouvrir le fichier " << filename << endl;
+                    return 1;
+                }
+            }
             if (!headerWritten && !headerNames.empty()) {
                 for (size_t i = 0; i < headerNames.size(); i++) {
-                    csvFile << headerNames[i] << (i < headerNames.size()-1 ? "," : "\n");
+                    *csvFile << headerNames[i] << (i < headerNames.size()-1 ? "," : "\n");
                 }
                 headerWritten = true;
             }
             for (size_t i = 0; i < avgValues.size(); i++) {
-                csvFile << avgValues[i] << (i < avgValues.size()-1 ? "," : "\n");
+                *csvFile << avgValues[i] << (i < avgValues.size()-1 ? "," : "\n");
             }
-            csvFile.flush();
-            cout << "Moyenne partielle de " << messageCounter << " messages écrite en CSV." << endl;
+            csvFile->flush();
+            cout << ".";
+            cout.flush();
         }
 
         if (cli.is_connected()) {
@@ -201,6 +226,8 @@ int main(int argc, char* argv[])
         return 1;
     }
     
-    csvFile.close();
+    if (csvFile && csvFile->is_open()) {
+        csvFile->close();
+    }
     return 0;
 }
