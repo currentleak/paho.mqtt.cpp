@@ -1,3 +1,7 @@
+# kco
+
+~/paho.mqtt.cpp/examples$ sudo g++ -o test1 async_message_consume_v5.cpp -lfftw3 -lpaho-mqttpp3 -lpaho-mqtt3as
+
 # Eclipse Paho MQTT C++ Client Library
 
 This repository contains the source code for the [Eclipse Paho](http://eclipse.org/paho) MQTT C++ client library for memory-managed operating systems such as Linux, MacOS, and Windows.
