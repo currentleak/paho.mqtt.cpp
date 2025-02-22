@@ -22,7 +22,7 @@ const string DFLT_SERVER_URI{"mqtt://192.168.1.73:1883"};
 const string CLIENT_ID{"PahoCppAsyncConsumeV5"};
 const string TOPIC{"inspection/ascan"};
 const int QOS = 1;
-const int DEFAULT_AVERAGE_COUNT = 1;
+const int DEFAULT_AVERAGE_COUNT = 64;
 
 int main(int argc, char* argv[])
 {
@@ -38,6 +38,7 @@ int main(int argc, char* argv[])
         string arg = argv[i];
         if (arg == "-a" && i + 1 < argc) {
             serverURI = argv[++i];
+            serverURI = "mqtt://" + serverURI + ":1883";
         }
         else if (arg == "-m" && i + 1 < argc) {
             try {
