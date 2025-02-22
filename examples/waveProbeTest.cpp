@@ -37,8 +37,7 @@ int main(int argc, char* argv[])
     for (int i = 1; i < argc; i++) {
         string arg = argv[i];
         if (arg == "-a" && i + 1 < argc) {
-            serverURI = argv[++i];
-            serverURI = "mqtt://" + serverURI + ":1883";
+            serverURI = "mqtt://" + (string)argv[++i] + ":1883";
         }
         else if (arg == "-m" && i + 1 < argc) {
             try {
