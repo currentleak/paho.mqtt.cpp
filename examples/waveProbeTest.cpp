@@ -221,7 +221,7 @@ int main(int argc, char* argv[])
                             auto t = std::time(nullptr);
                             std::tm tm = *std::localtime(&t);
                             std::ostringstream oss;
-                            oss << "data_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << ".csv";
+                            oss << "dataMeas_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << ".csv";
                             filename = oss.str();
                             csvFile = make_unique<ofstream>(filename, std::ios::out | std::ios::app);
                             if (!csvFile->is_open()) {
@@ -246,7 +246,7 @@ int main(int argc, char* argv[])
                                 auto t = std::time(nullptr);
                                 std::tm tm = *std::localtime(&t);
                                 std::ostringstream oss;
-                                oss << "data_ascan_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << ".csv";
+                                oss << "dataAscan_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << ".csv";
                                 ascanFilename = oss.str();
                                 ascanCsvFile = make_unique<ofstream>(ascanFilename, std::ios::out | std::ios::app);
                                 if (!ascanCsvFile->is_open()) {
@@ -283,7 +283,8 @@ int main(int argc, char* argv[])
                             std::ofstream fftFile(fftFilename, std::ios::out);
                             if (!fftFile.is_open()) {
                                 cerr << "Impossible d'ouvrir le fichier " << fftFilename << endl;
-                            } else {
+                            } 
+                            else {
                                 // En-tête : fréquence et magnitude
                                 fftFile << "Frequency (Hz),Magnitude\n";
                                 double sampleRate = 125e6; // 125 MHz
