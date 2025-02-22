@@ -1,20 +1,3 @@
-
-/*******************************************************************************
- * Copyright (c) 2013-2024 Frank Pagliughi <fpagliughi@mindspring.com>
- *
- * All rights reserved. This program and the accompanying materials
- * are made available under the terms of the Eclipse Public License v2.0
- * and Eclipse Distribution License v1.0 which accompany this distribution.
- *
- * The Eclipse Public License is available at
- *    http://www.eclipse.org/legal/epl-v20.html
- * and the Eclipse Distribution License is available at
- *   http://www.eclipse.org/org/documents/edl-v10.php.
- *
- * Contributors:
- *    Frank Pagliughi - initial implementation and documentation
- *******************************************************************************/
-
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -38,33 +21,61 @@ const int DEFAULT_AVERAGE_COUNT = 1;
 
 int main(int argc, char* argv[])
 {
-    // L'adresse du broker peut être passée en argument (sinon adresse par défaut)
-    auto serverURI = (argc > 1) ? string{argv[1]} : DFLT_SERVER_URI;
-
-    // Le nombre de messages à accumuler pour la moyenne (par défaut 1 ou fourni en argument)
+    cout << "Wave - Probe Characterisation" << endl;
+    
+    // Valeurs par défaut
+    string serverURI = DFLT_SERVER_URI;
     int averageCount = DEFAULT_AVERAGE_COUNT;
-    if(argc > 2) {
-        try {
-            averageCount = stoi(argv[2]);
-            if(averageCount < 1) {
-                cerr << "Le nombre de messages pour la moyenne doit être >= 1. Utilisation de la valeur par défaut (" 
+    bool recordCSV = false;  // Enregistrement CSV activé uniquement si -r est spécifié
+
+    // Traitement des arguments avec options -a, -m et -r
+    for (int i = 1; i < argc; i++) {
+        string arg = argv[i];
+        if (arg == "-a" && i + 1 < argc) {
+            serverURI = argv[++i];
+        }
+        else if (arg == "-m" && i + 1 < argc) {
+            try {
+                averageCount = stoi(argv[++i]);
+                if (averageCount < 1) {
+                    cerr << "Le nombre de messages pour la moyenne doit être >= 1. Utilisation de la valeur par défaut (" 
+                         << DEFAULT_AVERAGE_COUNT << ")." << endl;
+                    averageCount = DEFAULT_AVERAGE_COUNT;
+                }
+            }
+            catch (...) {
+                cerr << "Argument invalide pour le nombre de messages. Utilisation de la valeur par défaut (" 
                      << DEFAULT_AVERAGE_COUNT << ")." << endl;
                 averageCount = DEFAULT_AVERAGE_COUNT;
             }
         }
-        catch(...) {
-            cerr << "Argument invalide pour le nombre de messages. Utilisation de la valeur par défaut (" 
-                 << DEFAULT_AVERAGE_COUNT << ")." << endl;
-            averageCount = DEFAULT_AVERAGE_COUNT;
+        else if (arg == "-r") {
+            recordCSV = true;
+        }
+        else {
+            cerr << "Argument inconnu : " << arg << endl;
         }
     }
-
-    // Nous ne créons pas le fichier CSV tout de suite, il sera créé seulement s'il y a des données à enregistrer.
-    std::unique_ptr<std::ofstream> csvFile;
+    
+    // Affichage des paramètres pour vérification
+    cout << "Adresse du serveur MQTT : " << serverURI << endl;
+    cout << "Nombre de messages pour la moyenne : " << averageCount << endl;
+    cout << "Enregistrement CSV : " << (recordCSV ? "activé" : "désactivé") << endl;
+    
+    // Initialisation des fichiers CSV (seulement si activé)
+    std::unique_ptr<std::ofstream> csvFile;       // Pour les mesures
+    std::unique_ptr<std::ofstream> ascanCsvFile;    // Pour les données ascan
     bool headerWritten = false;
-    // Nom du fichier (sera défini lors de la première écriture)
-    string filename;
-
+    string filename, ascanFilename;
+    
+    // Variables pour accumuler les moyennes sur 'averageCount' messages
+    vector<double> sumValues(4, 0.0);   // Pour les 4 mesures
+    int messageCounter = 0;
+    
+    // Pour le champ "ascan"
+    vector<double> sumAscan;            // Sera redimensionné lors du premier message ascan
+    bool ascanInitialized = false;
+    
     mqtt::async_client cli(serverURI, CLIENT_ID);
 
     auto connOpts = mqtt::connect_options_builder::v5()
@@ -72,11 +83,7 @@ int main(int argc, char* argv[])
                         .properties({{mqtt::property::SESSION_EXPIRY_INTERVAL, 604800}})
                         .finalize();
 
-    // Variables pour accumuler les valeurs sur plusieurs messages
-    vector<double> sumValues(4, 0.0);
-    int messageCounter = 0;
-    vector<string> headerNames;  // Pour stocker les noms (champ "name") de chaque mesure
-
+    // Gestionnaires de connexion/déconnexion
     try {
         cli.set_connection_lost_handler([](const std::string&) {
             cout << "*** Connection Lost ***" << endl;
@@ -103,9 +110,41 @@ int main(int argc, char* argv[])
             cli.subscribe(TOPIC, QOS)->wait();
         }
         cout << "\n  OK" << endl;
-        cout << "\nWaiting for messages on topic: '" << TOPIC << "'" << endl;
-        cout << "La moyenne de " << averageCount << " message(s) sera écrite en CSV." << endl;
+        
+        // Envoi des paramètres de configuration avant la collecte
+        try {
+            vector<pair<string, string>> configMessages = {
+                {"inspection/configuration/probe/frequency", R"({"value": 5})"},
+                {"inspection/configuration/us/pulsetype", R"({"value": "spike"})"},
+                {"inspection/configuration/us/rxmode", R"({"value": "pe"})"},
+                {"inspection/configuration/us/voltage", R"({"value": 200})"},
+                {"inspection/configuration/us/filter", R"({"value": "Broadband low"})"},
+                {"inspection/configuration/us/rectification", R"({"value": "full"})"},
+                {"inspection/configuration/measurementselection/1", R"({"value": "G1_peak_amplitude"})"},
+                {"inspection/configuration/measurementselection/2", R"({"value": "G1_peak_soundPath"})"},
+                {"inspection/configuration/measurementselection/3", R"({"value": "G1_peak_surfaceDistance"})"},
+                {"inspection/configuration/measurementselection/4", R"({"value": "G1_peak_depth"})"}
+            };
 
+            for (const auto& conf : configMessages) {
+                auto pubmsg = mqtt::make_message(conf.first, conf.second);
+                pubmsg->set_qos(QOS);
+                cli.publish(pubmsg)->wait();  // Publication synchrone
+                cout << "Configuration envoyée: " << conf.first << " => " << conf.second << endl;
+            }
+        }
+        catch (const mqtt::exception& exc) {
+            cerr << "Erreur lors de l'envoi des paramètres de configuration: " << exc.what() << endl;
+            return 1;
+        }
+        
+        cout << "\nWaiting for messages on topic: '" << TOPIC << "'" << endl;
+        cout << "La moyenne de " << averageCount << " message(s) sera calculée." << endl;
+        
+        // Pour stocker les noms des mesures (pour l'en-tête du CSV)
+        vector<string> headerNames;
+        
+        // Boucle de réception et de traitement des messages MQTT
         while (true) {
             auto msg = cli.consume_message();
             if (!msg)
@@ -116,12 +155,13 @@ int main(int argc, char* argv[])
             try {
                 // Parser le JSON reçu
                 json j = json::parse(payload);
-                // On suppose qu'il y a 4 mesures: measurement.1 à measurement.4
+                
+                // Traitement des mesures (on suppose 4 mesures : measurement.1 à measurement.4)
                 for (int i = 1; i <= 4; i++) {
                     string key = "measurement." + to_string(i);
                     if(j.contains(key)) {
                         json meas = j[key];
-                        // Récupérer le nom de la mesure lors de la première accumulation
+                        // Récupération du nom de la mesure lors de la première accumulation
                         if(headerNames.size() < 4) {
                             string name = meas.value("name", "col" + to_string(i));
                             headerNames.push_back(name);
@@ -130,47 +170,100 @@ int main(int argc, char* argv[])
                         sumValues[i-1] += value;
                     }
                 }
+                
+                // Traitement du champ "ascan" : tableau d'entiers pouvant contenir jusqu'à 8192 valeurs
+                if(j.contains("ascan")) {
+                    auto ascanData = j["ascan"];
+                    if (ascanData.is_array()) {
+                        // Initialisation du vecteur d'accumulation pour ascan lors de la première réception
+                        if (!ascanInitialized) {
+                            sumAscan.resize(ascanData.size(), 0.0);
+                            ascanInitialized = true;
+                        }
+                        // Vérifier que la taille du tableau correspond à celle attendue
+                        if (ascanData.size() == sumAscan.size()) {
+                            for (size_t i = 0; i < ascanData.size(); i++) {
+                                sumAscan[i] += ascanData[i].get<int>();  // Conversion en entier, accumulation en double
+                            }
+                        }
+                        else {
+                            cerr << "Taille des données ascan différente de celle attendue." << endl;
+                        }
+                    }
+                }
+                
                 messageCounter++;
-
-                // Lorsque le nombre de messages accumulés atteint 'averageCount', calculer la moyenne et écrire dans le CSV
+                
+                // Dès que le nombre de messages atteint 'averageCount', calculer les moyennes
                 if(messageCounter == averageCount) {
+                    // Moyenne des mesures
                     vector<double> avgValues(4, 0.0);
                     for (int i = 0; i < 4; i++) {
                         avgValues[i] = sumValues[i] / messageCounter;
                     }
+                    // Moyenne des données ascan (si initialisé)
+                    vector<double> avgAscan;
+                    if(ascanInitialized) {
+                        avgAscan.resize(sumAscan.size(), 0.0);
+                        for (size_t i = 0; i < sumAscan.size(); i++) {
+                            avgAscan[i] = sumAscan[i] / messageCounter;
+                        }
+                    }
                     
-                    // Ouvrir le fichier CSV lors de la première écriture
-                    if (!csvFile) {
-                        // Génération du nom du fichier CSV incluant la date et l'heure (ex: data_YYYYMMDD_HHMMSS.csv)
-                        auto t = std::time(nullptr);
-                        std::tm tm = *std::localtime(&t);
-                        std::ostringstream oss;
-                        oss << "data_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << ".csv";
-                        filename = oss.str();
-                        csvFile = make_unique<ofstream>(filename, std::ios::out | std::ios::app);
-                        if (!csvFile->is_open()) {
-                            cerr << "Impossible d'ouvrir le fichier " << filename << endl;
-                            return 1;
+                    // Écriture dans les fichiers CSV si l'enregistrement est activé (-r)
+                    if(recordCSV) {
+                        // Pour les mesures
+                        if (!csvFile) {
+                            auto t = std::time(nullptr);
+                            std::tm tm = *std::localtime(&t);
+                            std::ostringstream oss;
+                            oss << "data_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << ".csv";
+                            filename = oss.str();
+                            csvFile = make_unique<ofstream>(filename, std::ios::out | std::ios::app);
+                            if (!csvFile->is_open()) {
+                                cerr << "Impossible d'ouvrir le fichier " << filename << endl;
+                                return 1;
+                            }
+                        }
+                        if (!headerWritten && !headerNames.empty()) {
+                            for (size_t i = 0; i < headerNames.size(); i++) {
+                                *csvFile << headerNames[i] << (i < headerNames.size()-1 ? "," : "\n");
+                            }
+                            headerWritten = true;
+                        }
+                        for (size_t i = 0; i < avgValues.size(); i++) {
+                            *csvFile << avgValues[i] << (i < avgValues.size()-1 ? "," : "\n");
+                        }
+                        csvFile->flush();
+                        
+                        // Pour les données ascan
+                        if (ascanInitialized) {
+                            if (!ascanCsvFile) {
+                                auto t = std::time(nullptr);
+                                std::tm tm = *std::localtime(&t);
+                                std::ostringstream oss;
+                                oss << "data_ascan_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << ".csv";
+                                ascanFilename = oss.str();
+                                ascanCsvFile = make_unique<ofstream>(ascanFilename, std::ios::out | std::ios::app);
+                                if (!ascanCsvFile->is_open()) {
+                                    cerr << "Impossible d'ouvrir le fichier " << ascanFilename << endl;
+                                }
+                            }
+                            if (ascanCsvFile && ascanCsvFile->is_open()) {
+                                for (size_t i = 0; i < avgAscan.size(); i++) {
+                                    *ascanCsvFile << avgAscan[i] << (i < avgAscan.size()-1 ? "," : "\n");
+                                }
+                                ascanCsvFile->flush();
+                            }
                         }
                     }
-
-                    // Écriture de l'en-tête si nécessaire
-                    if (!headerWritten) {
-                        for (size_t i = 0; i < headerNames.size(); i++) {
-                            *csvFile << headerNames[i] << (i < headerNames.size()-1 ? "," : "\n");
-                        }
-                        headerWritten = true;
-                    }
-                    // Écriture de la ligne contenant les moyennes calculées
-                    for (size_t i = 0; i < avgValues.size(); i++) {
-                        *csvFile << avgValues[i] << (i < avgValues.size()-1 ? "," : "\n");
-                    }
-                    csvFile->flush();
-                    cout << ".";
-                    cout.flush();
-                    // Réinitialiser le compteur et les sommes pour le prochain lot
+                    
+                    // Réinitialiser les accumulateurs pour le prochain lot
                     messageCounter = 0;
                     fill(sumValues.begin(), sumValues.end(), 0.0);
+                    if(ascanInitialized) {
+                        fill(sumAscan.begin(), sumAscan.end(), 0.0);
+                    }
                 }
             }
             catch (const std::exception & e) {
@@ -178,39 +271,7 @@ int main(int argc, char* argv[])
             }
         }
 
-        // En cas de lot partiel (nombre de messages accumulés inférieur à averageCount), écrire la moyenne partielle
-        if(messageCounter > 0) {
-            vector<double> avgValues(4, 0.0);
-            for (int i = 0; i < 4; i++) {
-                avgValues[i] = sumValues[i] / messageCounter;
-            }
-            // Ouvrir le fichier CSV si ce n'est pas déjà fait
-            if (!csvFile) {
-                auto t = std::time(nullptr);
-                std::tm tm = *std::localtime(&t);
-                std::ostringstream oss;
-                oss << "data_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << ".csv";
-                filename = oss.str();
-                csvFile = make_unique<ofstream>(filename, std::ios::out | std::ios::app);
-                if (!csvFile->is_open()) {
-                    cerr << "Impossible d'ouvrir le fichier " << filename << endl;
-                    return 1;
-                }
-            }
-            if (!headerWritten && !headerNames.empty()) {
-                for (size_t i = 0; i < headerNames.size(); i++) {
-                    *csvFile << headerNames[i] << (i < headerNames.size()-1 ? "," : "\n");
-                }
-                headerWritten = true;
-            }
-            for (size_t i = 0; i < avgValues.size(); i++) {
-                *csvFile << avgValues[i] << (i < avgValues.size()-1 ? "," : "\n");
-            }
-            csvFile->flush();
-            cout << ".";
-            cout.flush();
-        }
-
+        // Fermeture propre
         if (cli.is_connected()) {
             cout << "\nShutting down and disconnecting from the MQTT server..." << flush;
             cli.stop_consuming();
@@ -228,6 +289,9 @@ int main(int argc, char* argv[])
     
     if (csvFile && csvFile->is_open()) {
         csvFile->close();
+    }
+    if (ascanCsvFile && ascanCsvFile->is_open()) {
+        ascanCsvFile->close();
     }
     return 0;
 }
